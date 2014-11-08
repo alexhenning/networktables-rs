@@ -1,105 +1,99 @@
 
+use std::io::IoResult;
+use std::string::String;
+use super::{NtResult, NtError, StringConversionError};
+
 /// Protocol constants
 
 // The version of the protocol currently implemented.
 static VERSION: u16 = 0x0200;
 
-
 // ClientRequestID is the id clients use when requesting the server
 // assign an id to the key.
-static CLIENT_REQUEST_ID: u8 = 0xFFFF;
+// static CLIENT_REQUEST_ID: u8 = 0xFFFF;
 
 // Values used to indicate the various message types used in the
 // NetworkTables protocol.
-// static KEEP_ALIVE: u8 = 0x00;
-// static HELLO: u8 = 0x01;
-// static VERSION_UNSUPPORTED: u8 = 0x02;
-// static HELLO_COMPLETE: u8 = 0x03;
-// static ENTRY_ASSIGNMENT: u8 = 0x10;
-// static ENTRY_UPDATE: u8 = 0x11;
+pub const KEEP_ALIVE: u8 = 0x00;
+pub const HELLO: u8 = 0x01;
+pub const VERSION_UNSUPPORTED: u8 = 0x02;
+pub const HELLO_COMPLETE: u8 = 0x03;
+pub const ENTRY_ASSIGNMENT: u8 = 0x10;
+pub const ENTRY_UPDATE: u8 = 0x11;
 
-enum MessagType {
-    KeepAlive = 0x00,
-    Hello = 0x01,
-    VersionUnsupported = 0x02,
-    HelloComplete = 0x03,
-    EntryAssignment = 0x10,
-    EntryUpdate = 0x11,
-}
+// TODO: Replace with enum
+// pub enum MessageType {
+//     KeepAlive = 0x00,
+//     Hello = 0x01,
+//     VersionUnsupported = 0x02,
+//     HelloComplete = 0x03,
+//     EntryAssignment = 0x10,
+//     EntryUpdate = 0x11,
+// }
 
 // Types of data that can be sent over NetworkTables.
-// static TYPE_BOOLEAN: u8 = 0x00;
-// static TYPE_DOUBLE: u8 = 0x01;
-// static TYPE_STRING: u8 = 0x02;
-// static TYPE_BOOLEAN_ARRAY: u8 = 0x10;
-// static TYPE_DOUBLE_ARRAY: u8 = 0x11;
-// static TYPE_STRING_ARRAY: u8 = 0x12;
+const TYPE_BOOLEAN: u8 = 0x00;
+const TYPE_NUMBER: u8 = 0x01;
+const TYPE_STRING: u8 = 0x02;
+const TYPE_BOOLEAN_ARRAY: u8 = 0x10;
+const TYPE_DOUBLE_ARRAY: u8 = 0x11;
+const TYPE_STRING_ARRAY: u8 = 0x12;
 
-enum Type {
-    TBoolean = 0x00,
-    TDouble = 0x01,
-    TString = 0x02,
-    TBooleanArray = 0x10,
-    TDoubleArray = 0x11,
-    TStringArray = 0x12,
-}
+// enum Type {
+//     TBoolean = 0x00,
+//     TNumber = 0x01,
+//     TString = 0x02,
+//     TBooleanArray = 0x10,
+//     TDoubleArray = 0x11,
+//     TStringArray = 0x12,
+// }
 
 
 /// Entry definition
 // TODO: Mutex?
-pub struct Entry<'a> {
-    name: &'static str,
+#[deriving(Show)]
+pub struct Entry {
+    name: ::std::string::String,
     id: u16,
-    sequence: &'a mut SequenceNumber,
-    entry: &'a mut EntryType,
+    sequence: SequenceNumber,
+    entry: EntryType,
 }
 
+#[deriving(Show)]
 pub enum EntryType {
     Boolean(bool),
     Number(f64),
-    String(&'static str),
-}
-
-impl EntryType {
-    pub fn to_bytes(&self) -> Vec<u8> {
-        match *self {
-            Boolean(b) => get_boolean_bytes(b),
-            Number(n) => get_double_bytes(n),
-            String(s) => get_string_bytes(s),
-        }
-    }
-    
-    pub fn from_bytes() {
-
-    }
+    String(::std::string::String),
 }
 
 /// Protocol utilities
-fn get_boolean_bytes(val: bool) -> Vec<u8> {
-	if val {
-		vec![0x01]
-	} else {
-		vec![0x00]
-	}
+pub fn hello<T: Writer>(w: &mut T) -> IoResult<()> {
+    try!(w.write_u8(HELLO));
+    w.write_be_u16(VERSION)
 }
 
-fn get_double_bytes(val: f64) -> Vec<u8> {
-	// let bytes = make(&[u8], 8, 8)
-	// let bits = math.Float64bits(val)
-	// binary.BigEndian.PutUint64(bytes, bits)
-	// return bytes
-	vec![]
+pub fn parse_assignment<T: Reader>(r: &mut T) -> NtResult<Entry> {
+    let name = try!(parse_string(r));
+    let typ = try!(r.read_u8());
+    let id = try!(r.read_be_u16());
+    let seq_number = SequenceNumber(try!(r.read_be_u16()));
+    let value = match typ {
+        TYPE_BOOLEAN => Boolean(try!(r.read_u8()) != 0u8),
+        TYPE_NUMBER => Number(try!(r.read_be_f64())),
+        TYPE_STRING => String(try!(parse_string(r))),
+        t => panic!(format!("Unsupported type: {}", t)), // TODO: Don't panic
+    };
+    Ok(Entry{name: name, id: id, sequence: seq_number, entry: value})
 }
 
-fn get_string_bytes(val: &'static str) -> Vec<u8> {
-	// bytes := make([]byte, 0, 2+len(val))
-	// bytes = append(bytes, getUint16Bytes((uint16)(len(val)))...)
-	// bytes = append(bytes, []byte(val)...)
-	// return bytes
-	vec![]
+pub fn parse_string<T: Reader>(r: &mut T) -> NtResult<::std::string::String> {
+    let length = try!(r.read_be_u16());
+    let vec = try!(r.read_exact(length as uint));
+    match ::std::string::String::from_utf8(vec) {
+        Ok(s) => Ok(s),
+        Err(_) => Err(NtError{kind: StringConversionError}),
+    }
 }
-
-
 
 /// Sequence Numbers are a special type of number
 /// Implements [rfc1982](http://tools.ietf.org/html/rfc1982)
@@ -148,29 +142,29 @@ mod test {
     
     #[test]
     fn entry_basics() {
-        let eb = Entry{name: "Boolean", id: 0u16, sequence: &mut SequenceNumber(0u16), entry: &mut Boolean(true)};
+        let eb = Entry{name: "Boolean", id: 0u16, sequence: SequenceNumber(0u16), entry: Boolean(true)};
         assert_eq!("Boolean", eb.name);
         assert_eq!(0u16, eb.id);
-        assert_eq!(SequenceNumber(0u16), *eb.sequence);
-        assert_eq!(true, match *eb.entry {
+        assert_eq!(SequenceNumber(0u16), eb.sequence);
+        assert_eq!(true, match eb.entry {
             Boolean(b) => b,
             _ => false,
         });
         
-        let ne = Entry{name: "Number", id: 1u16, sequence: &mut SequenceNumber(0u16), entry: &mut Number(42f64)};
+        let ne = Entry{name: "Number", id: 1u16, sequence: SequenceNumber(0u16), entry: Number(42f64)};
         assert_eq!("Number", ne.name);
         assert_eq!(1u16, ne.id);
-        assert_eq!(SequenceNumber(0u16), *ne.sequence);
-        assert_eq!(42f64, match *ne.entry {
+        assert_eq!(SequenceNumber(0u16), ne.sequence);
+        assert_eq!(42f64, match ne.entry {
             Number(n) => n,
             _ => 0f64,
         });
         
-        let se = Entry{name: "String", id: 2u16, sequence: &mut SequenceNumber(0u16), entry: &mut String("Test")};
+        let se = Entry{name: "String", id: 2u16, sequence: SequenceNumber(0u16), entry: String("Test")};
         assert_eq!("String", se.name);
         assert_eq!(2u16, se.id);
-        assert_eq!(SequenceNumber(0u16), *se.sequence);
-        assert_eq!("Test", match *se.entry {
+        assert_eq!(SequenceNumber(0u16), se.sequence);
+        assert_eq!("Test", match se.entry {
             String(s) => s,
             _ => "",
         });
