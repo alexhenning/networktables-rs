@@ -80,44 +80,44 @@ impl Client {
     }
 
     fn handle_entry_assignment(&self, connection: &mut TcpStream) {
-        match self.assign_entry(match protocol::parse_assignment(connection) {
+        let entry = match protocol::parse_assignment(connection) {
             Ok(e) => e,
             Err(e) => panic!("Error parsing assignment: {}", e), // TODO: Handle more gracefully
-        }) {
-            Ok(_) => (),
-            Err(e) => panic!("Error assigning entry: {}", e), // TODO: Handle more gracefully
-        }
-    }
-
-    fn handle_entry_update(&self, connection: &mut TcpStream) {
-        match self.assign_entry(match protocol::parse_update(connection, |id| self.id_lookup(id)) {
-            Ok(e) => e,
-            Err(e) => panic!("Error parsing update: {}", e), // TODO: Handle more gracefully
-        }) {
-            Ok(_) => (),
-            Err(e) => panic!("Error updating entry: {}", e), // TODO: Handle more gracefully
-        }
-    }
-
-    fn assign_entry(&self, entry: protocol::Entry) -> NtResult<()> {
-        println!("{}", entry);
+        };
+        println!("Assign: {}", entry);
         
         let mut names = self.entries_by_name.lock();
         if names.contains_key(&entry.name) {
-            return Err(NtError{kind: KeyAlreadyExists(entry.name)})
+            // TODO: Handle more gracefully
+            panic!("Error assigning entry: {}", NtError{kind: KeyAlreadyExists(entry.name)})
         }
 
         let mut ids = self.entries_by_id.lock();
         if ids.contains_key(&entry.id) {
-            return Err(NtError{kind: IdAlreadyExists(entry.id)})
+            // TODO: Handle more gracefully
+            panic!("Error assigning entry: {}", NtError{kind: IdAlreadyExists(entry.id)})
         }
 
         let name = entry.name.clone();
         names.insert(name, entry.clone());
         let id = entry.id.clone();
         ids.insert(id, entry);
+    }
+
+    fn handle_entry_update(&self, connection: &mut TcpStream) {
+        let entry = match protocol::parse_update(connection, |id| self.id_lookup(id)) {
+            Ok(e) => e,
+            Err(e) => panic!("Error parsing update: {}", e), // TODO: Handle more gracefully
+        };
+        println!("Update: {}", entry);
         
-        Ok(())
+        let mut names = self.entries_by_name.lock();
+        let mut ids = self.entries_by_id.lock();
+
+        let name = entry.name.clone();
+        names.insert(name, entry.clone());
+        let id = entry.id.clone();
+        ids.insert(id, entry);
     }
 
     fn get_entry(&self, key: String) -> Option<protocol::EntryType> {
