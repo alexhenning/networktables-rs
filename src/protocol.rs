@@ -1,7 +1,6 @@
 
 use std::io::IoResult;
-use std::string::String;
-use super::{NtResult, NtError, StringConversionError};
+use super::{NtResult, NtError, StringConversionError, UnsupportedType, IdDoesntExist};
 
 /// Protocol constants
 
@@ -14,9 +13,9 @@ static VERSION: u16 = 0x0200;
 
 // Values used to indicate the various message types used in the
 // NetworkTables protocol.
-pub const KEEP_ALIVE: u8 = 0x00;
+// pub const KEEP_ALIVE: u8 = 0x00;
 pub const HELLO: u8 = 0x01;
-pub const VERSION_UNSUPPORTED: u8 = 0x02;
+// pub const VERSION_UNSUPPORTED: u8 = 0x02;
 pub const HELLO_COMPLETE: u8 = 0x03;
 pub const ENTRY_ASSIGNMENT: u8 = 0x10;
 pub const ENTRY_UPDATE: u8 = 0x11;
@@ -35,9 +34,9 @@ pub const ENTRY_UPDATE: u8 = 0x11;
 const TYPE_BOOLEAN: u8 = 0x00;
 const TYPE_NUMBER: u8 = 0x01;
 const TYPE_STRING: u8 = 0x02;
-const TYPE_BOOLEAN_ARRAY: u8 = 0x10;
-const TYPE_DOUBLE_ARRAY: u8 = 0x11;
-const TYPE_STRING_ARRAY: u8 = 0x12;
+// const TYPE_BOOLEAN_ARRAY: u8 = 0x10;
+// const TYPE_DOUBLE_ARRAY: u8 = 0x11;
+// const TYPE_STRING_ARRAY: u8 = 0x12;
 
 // enum Type {
 //     TBoolean = 0x00,
@@ -51,15 +50,15 @@ const TYPE_STRING_ARRAY: u8 = 0x12;
 
 /// Entry definition
 // TODO: Mutex?
-#[deriving(Show)]
+#[deriving(Show, Clone)]
 pub struct Entry {
-    name: ::std::string::String,
-    id: u16,
-    sequence: SequenceNumber,
-    entry: EntryType,
+    pub name: ::std::string::String,
+    pub id: u16,
+    pub sequence: SequenceNumber,
+    pub value: EntryType,
 }
 
-#[deriving(Show)]
+#[deriving(Show, Clone)]
 pub enum EntryType {
     Boolean(bool),
     Number(f64),
@@ -81,9 +80,25 @@ pub fn parse_assignment<T: Reader>(r: &mut T) -> NtResult<Entry> {
         TYPE_BOOLEAN => Boolean(try!(r.read_u8()) != 0u8),
         TYPE_NUMBER => Number(try!(r.read_be_f64())),
         TYPE_STRING => String(try!(parse_string(r))),
-        t => panic!(format!("Unsupported type: {}", t)), // TODO: Don't panic
+        t => return Err(NtError{kind: UnsupportedType(t)}),
     };
-    Ok(Entry{name: name, id: id, sequence: seq_number, entry: value})
+    Ok(Entry{name: name, id: id, sequence: seq_number, value: value})
+}
+
+pub fn parse_update<T: Reader>(r: &mut T, f: |u16| -> Option<(::std::string::String, EntryType)>)
+                               -> NtResult<Entry> {
+    let id = try!(r.read_be_u16());
+    let seq_number = SequenceNumber(try!(r.read_be_u16()));
+    let (name, entry_type) = match f(id) {
+        Some((name, entry_type)) => (name, entry_type),
+        None => return Err(NtError{kind: IdDoesntExist(id)}),
+    };
+    let value = match entry_type {
+        Boolean(_) => Boolean(try!(r.read_u8()) != 0u8),
+        Number(_) => Number(try!(r.read_be_f64())),
+        String(_) => String(try!(parse_string(r))),
+    };
+    Ok(Entry{name: name, id: id, sequence: seq_number, value: value})
 }
 
 pub fn parse_string<T: Reader>(r: &mut T) -> NtResult<::std::string::String> {
@@ -100,7 +115,7 @@ pub fn parse_string<T: Reader>(r: &mut T) -> NtResult<::std::string::String> {
 // TODO: Document
 // TODO: Does it need to be a tuple
 // TODO: Test
-#[deriving(Show)]
+#[deriving(Show, Clone)]
 pub struct SequenceNumber(u16);
 static SEQUENCE_NUMBER_DIVIDING_POINT: u16 = 32768u16;
 
@@ -135,6 +150,7 @@ impl Ord for SequenceNumber {
 }
 
 /// Tests
+#[cfg(test)]
 mod test {
     use super::{Entry, Boolean, Number, String};
     use super::{SequenceNumber, SEQUENCE_NUMBER_DIVIDING_POINT};
@@ -142,8 +158,9 @@ mod test {
     
     #[test]
     fn entry_basics() {
-        let eb = Entry{name: "Boolean", id: 0u16, sequence: SequenceNumber(0u16), entry: Boolean(true)};
-        assert_eq!("Boolean", eb.name);
+        let eb = Entry{name: ::std::string::String::from_str("Boolean"),
+                       id: 0u16, sequence: SequenceNumber(0u16), value: Boolean(true)};
+        assert_eq!("Boolean", eb.name.as_slice());
         assert_eq!(0u16, eb.id);
         assert_eq!(SequenceNumber(0u16), eb.sequence);
         assert_eq!(true, match eb.entry {
@@ -151,8 +168,9 @@ mod test {
             _ => false,
         });
         
-        let ne = Entry{name: "Number", id: 1u16, sequence: SequenceNumber(0u16), entry: Number(42f64)};
-        assert_eq!("Number", ne.name);
+        let ne = Entry{name: ::std::string::String::from_str("Number"),
+                       id: 1u16, sequence: SequenceNumber(0u16), value: Number(42f64)};
+        assert_eq!("Number", ne.name.as_slice());
         assert_eq!(1u16, ne.id);
         assert_eq!(SequenceNumber(0u16), ne.sequence);
         assert_eq!(42f64, match ne.entry {
@@ -160,14 +178,16 @@ mod test {
             _ => 0f64,
         });
         
-        let se = Entry{name: "String", id: 2u16, sequence: SequenceNumber(0u16), entry: String("Test")};
-        assert_eq!("String", se.name);
+        let se = Entry{name: ::std::string::String::from_str("String"),
+                       id: 2u16, sequence: SequenceNumber(0u16),
+                       value: String(::std::string::String::from_str("Test"))};
+        assert_eq!("String", se.name.as_slice());
         assert_eq!(2u16, se.id);
         assert_eq!(SequenceNumber(0u16), se.sequence);
         assert_eq!("Test", match se.entry {
             String(s) => s,
-            _ => "",
-        });
+            _ => ::std::string::String::from_str(""),
+        }.as_slice());
     }
 
     #[test]
