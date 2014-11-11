@@ -5,11 +5,11 @@ use super::{NtResult, NtError, StringConversionError, UnsupportedType, IdDoesntE
 /// Protocol constants
 
 // The version of the protocol currently implemented.
-static VERSION: u16 = 0x0200;
+const VERSION: u16 = 0x0200;
 
 // ClientRequestID is the id clients use when requesting the server
 // assign an id to the key.
-// static CLIENT_REQUEST_ID: u8 = 0xFFFF;
+pub const CLIENT_REQUEST_ID: u16 = 0xFFFF;
 
 // Values used to indicate the various message types used in the
 // NetworkTables protocol.
@@ -71,6 +71,24 @@ pub fn hello<T: Writer>(w: &mut T) -> IoResult<()> {
     w.write_be_u16(VERSION)
 }
 
+pub fn write_assignment<T: Writer>(w: &mut T, entry: &Entry) -> NtResult<()> {
+    try!(w.write_u8(ENTRY_ASSIGNMENT));
+    try!(write_string(w, entry.name.clone()));
+    try!(w.write_u8(match entry.value {
+        Boolean(_) => TYPE_BOOLEAN,
+        Number(_) => TYPE_NUMBER,
+        String(_) => TYPE_STRING,
+    }));
+    try!(w.write_be_u16(entry.id));
+    try!(w.write_be_u16(entry.sequence.as_u16()));
+    match entry.value {
+        Boolean(b) => try!(w.write_u8(match b {true => 0x01u8, false => 0x00u8})),
+        Number(n) => try!(w.write_be_f64(n)),
+        String(ref s) => try!(write_string(w, s.clone())),
+    };
+    Ok(())
+}
+
 pub fn parse_assignment<T: Reader>(r: &mut T) -> NtResult<Entry> {
     let name = try!(parse_string(r));
     let typ = try!(r.read_u8());
@@ -83,6 +101,18 @@ pub fn parse_assignment<T: Reader>(r: &mut T) -> NtResult<Entry> {
         t => return Err(NtError{kind: UnsupportedType(t)}),
     };
     Ok(Entry{name: name, id: id, sequence: seq_number, value: value})
+}
+
+pub fn write_update<T: Writer>(w: &mut T, entry: &Entry) -> NtResult<()> {
+    try!(w.write_u8(ENTRY_UPDATE));
+    try!(w.write_be_u16(entry.id));
+    try!(w.write_be_u16(entry.sequence.as_u16()));
+    match entry.value {
+        Boolean(b) => try!(w.write_u8(match b {true => 0x01u8, false => 0x00u8})),
+        Number(n) => try!(w.write_be_f64(n)),
+        String(ref s) => try!(write_string(w, s.clone())),
+    };
+    Ok(())
 }
 
 pub fn parse_update<T: Reader>(r: &mut T, f: |u16| -> Option<(::std::string::String, EntryType)>)
@@ -101,6 +131,16 @@ pub fn parse_update<T: Reader>(r: &mut T, f: |u16| -> Option<(::std::string::Str
     Ok(Entry{name: name, id: id, sequence: seq_number, value: value})
 }
 
+pub fn write_string<T: Writer>(w: &mut T, s: ::std::string::String) -> NtResult<()> {
+    try!(w.write_be_u16(s.len() as u16));
+    for byte in s.into_bytes().iter() {
+        try!(w.write_u8(*byte))
+    }
+    // TODO: Assert number of bits written == length
+    // TODO: Assert that string length is 16 bits
+    Ok(())
+}
+
 pub fn parse_string<T: Reader>(r: &mut T) -> NtResult<::std::string::String> {
     let length = try!(r.read_be_u16());
     let vec = try!(r.read_exact(length as uint));
@@ -116,8 +156,20 @@ pub fn parse_string<T: Reader>(r: &mut T) -> NtResult<::std::string::String> {
 // TODO: Does it need to be a tuple
 // TODO: Test
 #[deriving(Show, Clone)]
-pub struct SequenceNumber(u16);
+pub struct SequenceNumber(pub u16);
 static SEQUENCE_NUMBER_DIVIDING_POINT: u16 = 32768u16;
+
+impl SequenceNumber {
+    pub fn increment(&mut self) {
+        let SequenceNumber(n) = *self;
+        *self = SequenceNumber(n + 1);
+    }
+    
+    pub fn as_u16(&self) -> u16 {
+        let SequenceNumber(n) = *self;
+        n
+    }
+}
 
 impl PartialEq for SequenceNumber {
     fn eq(&self, other: &SequenceNumber) -> bool {

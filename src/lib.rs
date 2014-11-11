@@ -1,11 +1,11 @@
 
-pub use client::Client;
+pub use self::client::{Client, Get, Set};
 
 use std::error::Error;
 use std::error::FromError;
 use std::io::IoError;
 
-pub mod client;
+mod client;
 pub mod server;
 mod protocol;
     
