@@ -15,12 +15,12 @@ fn main() {
         Err(err) => panic!(format!("{}", err.kind))
     };
 
-    client.set("/Counter".to_string(), 0f64);
+    let _ = client.set("/Counter".to_string(), 0f64);
 
     let mut timer = Timer::new().unwrap();
     let periodic = timer.periodic(Duration::milliseconds(1000));
     println!("Started");
-    loop {
+    for _ in range(0i64, 10i64) {
         // Print each of the types
         let b: Option<bool> = client.get("//Test".to_string());
         let n: Option<f64> = client.get("/Double".to_string());
@@ -30,12 +30,13 @@ fn main() {
         // Counter code
         let i: Option<f64> = client.get("/Counter".to_string());
         match i {
-            Some(n) => {client.set("/Counter".to_string(), n+1f64);},
+            Some(n) => {let _ = client.set("/Counter".to_string(), n+1f64);},
             None => (),
         };
 
         // Rate limit to once a second
         periodic.recv();
     }
-    // println!("{} {} {}", client.Get::<bool>);
+    client.close();
+    println!("Done");
 }

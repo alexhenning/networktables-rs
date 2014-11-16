@@ -1,7 +1,7 @@
 
 use super::protocol;
 use super::NtResult;
-use super::{NtError, KeyAlreadyExists, IdAlreadyExists};
+use super::{NtError, KeyAlreadyExists, IdAlreadyExists, NetworkProblem};
 
 use std::sync::{Arc, Mutex};
 use std::collections::HashMap;
@@ -26,11 +26,14 @@ pub trait Set<T> {
 }
 
 // pub trait SubTable : Get<bool> + Get<f64> + Get<String> {}
+// pub trait SubTable : Get<bool + f64 + String> {}
 
+// TODO: better map without race conditions
 // Locking order to avoid deadlocks:
 // - entries_by_name
 // - entries_by_id
 // - send_queue
+// - state
 // - connection
 
 /// A [NetworkTables 2.0](https://docs.google.com/document/d/1On9BkUgkmMmTnfVxSQlOZMWsa9Vas6-8cT19TX59Tho/edit)
@@ -47,19 +50,22 @@ pub trait Set<T> {
 #[deriving(Sync)]
 pub struct Client {
     entries_by_name: Mutex<HashMap<String, protocol::Entry>>,
-    entries_by_id: Mutex<HashMap<u16, protocol::Entry>>, // TODO: better map without race conditions
+    entries_by_id: Mutex<HashMap<u16, protocol::Entry>>,
     send_queue: Mutex<Vec<protocol::Entry>>,
-	// toSend:        map[string]entry
-	// done:          chan error // state: State,
+    state: Mutex<State>,
+    // errors: Mutex<Vec<&Error>>
 	connection: Mutex<TcpStream>,
 }
 
 /// The state of the clients connection.
+#[deriving(PartialEq,Eq,Sync,Clone)]
 pub enum State {
+    /// The state between starting and receiving th hello complete message.
+    Initializing,
     /// The state after receiving a hello complete message.
     Connected,
-    /// The state between starting and receiving th hello complete message.
-    Disconnected,
+    /// The state when it has closed down properly.
+    Closed,
     /// The state once a fatal error occurs.
     Error(NtError)
 }
@@ -72,13 +78,14 @@ impl Client {
         let connection = Mutex::new(try!(connect(address)));
         {
             // Make sure to release the lock
-            try!(protocol::hello(&mut *connection.lock()))
+            try!(protocol::write_hello(&mut *connection.lock()))
         }
         
         let client = Arc::new(Client{
             entries_by_name: Mutex::new(HashMap::new()),
             entries_by_id: Mutex::new(HashMap::new()),
             send_queue: Mutex::new(Vec::new()),
+            state: Mutex::new(Initializing),
             connection: connection,
         });
         
@@ -90,54 +97,87 @@ impl Client {
         // Err(NtError{kind: InvalidAddress})
     }
 
+    pub fn close(&self) {
+        let mut connection = self.clone_connection();
+
+        match connection.close_read() {
+            Err(e) => println!("{}", e),
+            _ => (),
+        }
+        
+        match connection.close_write() {
+            Err(e) => println!("{}", e),
+            _ => (),
+        }
+    }
+
+    fn clone_connection(&self) -> TcpStream {
+        let mutex = self.connection.lock();
+        (*mutex).clone()
+    }
+
+    fn get_state(&self) -> State {
+        let mutex = self.state.lock();
+        (*mutex).clone()
+    }
+
     fn send(&self) {
-        let mut timer = Timer::new().unwrap();
+        let keep_alive_cutoff: u64 = 1000 /*ms*/ / 20 /*ms*/;
+        let mut counter = 0;
+        let mut timer = Timer::new().unwrap(); // TODO: Possibility for panic?
         let periodic = timer.periodic(Duration::milliseconds(20));
 
         loop {
             periodic.recv();
-            self.send_queue();
-            // TODO: Heartbeat
+            let mut err = self.send_queue();
+            counter += 1;
+            if (counter % keep_alive_cutoff) == 0 {
+                counter = 0;
+                err = err.and(self.send_keep_alive());
+            }
+
+            // TODO: Handle write errors.
+            match err {
+                Ok(_) => (),
+                Err(e) => return self.log_fatal(e),
+            }
         }
     }
 
-    fn send_queue(&self) {
-        let mut connection = {
-            let mutex = self.connection.lock();
-            (*mutex).clone()
-        };
+    fn send_queue(&self) -> NtResult<()> {
+        let mut connection = self.clone_connection();
 
-        // TODO: Handle write errors.
+        // Send all entries in the queue
         let mut queue = self.send_queue.lock();
         for entry in queue.iter() {
-            if entry.id.clone() == protocol::CLIENT_REQUEST_ID {
-                println!("Sending: Assign {}", entry);
-                protocol::write_assignment(&mut connection, entry);
-            } else {
-                println!("Sending: Update {}", entry);
-                protocol::write_update(&mut connection, entry);
-            }
+            try!(match entry.id.clone() {
+                protocol::CLIENT_REQUEST_ID => protocol::write_assignment(&mut connection, entry),
+                _ => protocol::write_update(&mut connection, entry),
+            });
         }
 
         // Clear queue
         *queue = Vec::new();
+        Ok(())
+    }
+
+    fn send_keep_alive(&self) -> NtResult<()> {
+        let mut connection = self.clone_connection();
+        protocol::write_keep_alive(&mut connection)
     }
     
     fn listen(&self) {
-        let mut connection = {
-            let mutex = self.connection.lock();
-            (*mutex).clone()
-        };
+        let mut connection = self.clone_connection();
 
         loop {
             let msg = match connection.read_u8() {
                 Ok(b) => b,
-                Err(e) => panic!(e),
+                Err(e) => {self.log_fatal(NtError{kind: NetworkProblem(e)}); panic!("Fatal Error");}, // TODO: Handle more gracefully
             };
             match msg {
                 protocol::HELLO_COMPLETE => self.handle_hello_complete(),
-                protocol::ENTRY_ASSIGNMENT => self.handle_entry_assignment(&mut connection.clone()),
-                protocol::ENTRY_UPDATE => self.handle_entry_update(&mut connection.clone()),
+                protocol::ENTRY_ASSIGNMENT => self.handle_entry_assignment(),
+                protocol::ENTRY_UPDATE => self.handle_entry_update(),
                 m => println!("Unsupported message type 0x{:02X}", m), // panic!(format!("Unsupported message type {}", m)), // TODO: Handle more gracefully
             }
         }
@@ -145,12 +185,17 @@ impl Client {
 
     fn handle_hello_complete(&self) {
         println!("Hello completed successfully.");
+        let mut state = self.state.lock();
+        if *state == Initializing {
+            *state = Connected;
+        }
     }
 
-    fn handle_entry_assignment(&self, connection: &mut TcpStream) {
-        let entry = match protocol::parse_assignment(connection) {
+    fn handle_entry_assignment(&self) {
+        let mut connection = self.clone_connection();
+        let entry = match protocol::parse_assignment(&mut connection) {
             Ok(e) => e,
-            Err(e) => panic!("Error parsing assignment: {}", e), // TODO: Handle more gracefully
+            Err(e) => {self.log_fatal(e); panic!("Fatal Error");}, // TODO: Handle more gracefully
         };
         println!("Assign: {}", entry);
         
@@ -172,10 +217,11 @@ impl Client {
         ids.insert(id, entry);
     }
 
-    fn handle_entry_update(&self, connection: &mut TcpStream) {
-        let entry = match protocol::parse_update(connection, |id| self.id_lookup(id)) {
+    fn handle_entry_update(&self) {
+        let mut connection = self.clone_connection();
+        let entry = match protocol::parse_update(&mut connection, |id| self.id_lookup(id)) {
             Ok(e) => e,
-            Err(e) => panic!("Error parsing update: {}", e), // TODO: Handle more gracefully
+            Err(e) => {self.log_fatal(e); panic!("Fatal Error");}, // TODO: Handle more gracefully
         };
         println!("Update: {}", entry);
         
@@ -239,6 +285,15 @@ impl Client {
             None => return None,
         };
         Some((entry.name, entry.value))
+    }
+
+    fn log_fatal(&self, err: NtError) {
+        if self.get_state() == Closed {
+            // TODO: Append error to log
+        } else {
+            let mut state = self.state.lock();
+            *state = Error(err);
+        }
     }
 }
 

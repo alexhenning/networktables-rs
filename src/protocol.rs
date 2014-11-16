@@ -1,5 +1,4 @@
 
-use std::io::IoResult;
 use super::{NtResult, NtError, StringConversionError, UnsupportedType, IdDoesntExist};
 
 /// Protocol constants
@@ -13,24 +12,14 @@ pub const CLIENT_REQUEST_ID: u16 = 0xFFFF;
 
 // Values used to indicate the various message types used in the
 // NetworkTables protocol.
-// pub const KEEP_ALIVE: u8 = 0x00;
+pub const KEEP_ALIVE: u8 = 0x00;
 pub const HELLO: u8 = 0x01;
 // pub const VERSION_UNSUPPORTED: u8 = 0x02;
 pub const HELLO_COMPLETE: u8 = 0x03;
 pub const ENTRY_ASSIGNMENT: u8 = 0x10;
 pub const ENTRY_UPDATE: u8 = 0x11;
 
-// TODO: Replace with enum
-// pub enum MessageType {
-//     KeepAlive = 0x00,
-//     Hello = 0x01,
-//     VersionUnsupported = 0x02,
-//     HelloComplete = 0x03,
-//     EntryAssignment = 0x10,
-//     EntryUpdate = 0x11,
-// }
-
-// Types of data that can be sent over NetworkTables.
+// Types of data that can be sent over NetworkTables.s
 const TYPE_BOOLEAN: u8 = 0x00;
 const TYPE_NUMBER: u8 = 0x01;
 const TYPE_STRING: u8 = 0x02;
@@ -38,37 +27,35 @@ const TYPE_STRING: u8 = 0x02;
 // const TYPE_DOUBLE_ARRAY: u8 = 0x11;
 // const TYPE_STRING_ARRAY: u8 = 0x12;
 
-// enum Type {
-//     TBoolean = 0x00,
-//     TNumber = 0x01,
-//     TString = 0x02,
-//     TBooleanArray = 0x10,
-//     TDoubleArray = 0x11,
-//     TStringArray = 0x12,
-// }
-
 
 /// Entry definition
-// TODO: Mutex?
 #[deriving(Show, Clone)]
 pub struct Entry {
-    pub name: ::std::string::String,
+    pub name: StdString,
     pub id: u16,
     pub sequence: SequenceNumber,
     pub value: EntryType,
 }
 
+// Since we overloaded the name string, maybe we should have NtString
+// instead. We'll see what makes sense.
+type StdString = ::std::string::String;
+
 #[deriving(Show, Clone)]
 pub enum EntryType {
     Boolean(bool),
     Number(f64),
-    String(::std::string::String),
+    String(StdString),
 }
 
 /// Protocol utilities
-pub fn hello<T: Writer>(w: &mut T) -> IoResult<()> {
+pub fn write_hello<T: Writer>(w: &mut T) -> NtResult<()> {
     try!(w.write_u8(HELLO));
-    w.write_be_u16(VERSION)
+    Ok(try!(w.write_be_u16(VERSION)))
+}
+
+pub fn write_keep_alive<T: Writer>(w: &mut T) -> NtResult<()> {
+    Ok(try!(w.write_u8(KEEP_ALIVE)))
 }
 
 pub fn write_assignment<T: Writer>(w: &mut T, entry: &Entry) -> NtResult<()> {
@@ -115,7 +102,7 @@ pub fn write_update<T: Writer>(w: &mut T, entry: &Entry) -> NtResult<()> {
     Ok(())
 }
 
-pub fn parse_update<T: Reader>(r: &mut T, f: |u16| -> Option<(::std::string::String, EntryType)>)
+pub fn parse_update<T: Reader>(r: &mut T, f: |u16| -> Option<(StdString, EntryType)>)
                                -> NtResult<Entry> {
     let id = try!(r.read_be_u16());
     let seq_number = SequenceNumber(try!(r.read_be_u16()));
@@ -131,7 +118,7 @@ pub fn parse_update<T: Reader>(r: &mut T, f: |u16| -> Option<(::std::string::Str
     Ok(Entry{name: name, id: id, sequence: seq_number, value: value})
 }
 
-pub fn write_string<T: Writer>(w: &mut T, s: ::std::string::String) -> NtResult<()> {
+pub fn write_string<T: Writer>(w: &mut T, s: StdString) -> NtResult<()> {
     try!(w.write_be_u16(s.len() as u16));
     for byte in s.into_bytes().iter() {
         try!(w.write_u8(*byte))
@@ -141,7 +128,7 @@ pub fn write_string<T: Writer>(w: &mut T, s: ::std::string::String) -> NtResult<
     Ok(())
 }
 
-pub fn parse_string<T: Reader>(r: &mut T) -> NtResult<::std::string::String> {
+pub fn parse_string<T: Reader>(r: &mut T) -> NtResult<StdString> {
     let length = try!(r.read_be_u16());
     let vec = try!(r.read_exact(length as uint));
     match ::std::string::String::from_utf8(vec) {
@@ -153,8 +140,6 @@ pub fn parse_string<T: Reader>(r: &mut T) -> NtResult<::std::string::String> {
 /// Sequence Numbers are a special type of number
 /// Implements [rfc1982](http://tools.ietf.org/html/rfc1982)
 // TODO: Document
-// TODO: Does it need to be a tuple
-// TODO: Test
 #[deriving(Show, Clone)]
 pub struct SequenceNumber(pub u16);
 static SEQUENCE_NUMBER_DIVIDING_POINT: u16 = 32768u16;
@@ -168,6 +153,20 @@ impl SequenceNumber {
     pub fn as_u16(&self) -> u16 {
         let SequenceNumber(n) = *self;
         n
+    }
+    
+    fn cmp(&self, other: &SequenceNumber) -> Ordering {
+        let s = match *self { SequenceNumber(n) => n };
+        let o = match *other { SequenceNumber(n) => n };
+
+        if s == o {
+            Equal
+        } else if (s < o && o-s < SEQUENCE_NUMBER_DIVIDING_POINT)
+            || (s > o && s-o > SEQUENCE_NUMBER_DIVIDING_POINT) {
+                Less
+        } else {
+            Greater
+        }
     }
 }
 
@@ -185,22 +184,6 @@ impl PartialOrd for SequenceNumber {
     }
 }
 
-impl Ord for SequenceNumber {
-    fn cmp(&self, other: &SequenceNumber) -> Ordering {
-        let s = match *self { SequenceNumber(n) => n };
-        let o = match *other { SequenceNumber(n) => n };
-
-        if s == o {
-            Equal
-        } else if (s < o && o-s < SEQUENCE_NUMBER_DIVIDING_POINT)
-            || (s > o && s-o > SEQUENCE_NUMBER_DIVIDING_POINT) {
-                Less
-        } else {
-            Greater
-        }
-    }
-}
-
 /// Tests
 #[cfg(test)]
 mod test {
@@ -210,7 +193,7 @@ mod test {
     
     #[test]
     fn entry_basics() {
-        let eb = Entry{name: ::std::string::String::from_str("Boolean"),
+        let eb = Entry{name: StdString::from_str("Boolean"),
                        id: 0u16, sequence: SequenceNumber(0u16), value: Boolean(true)};
         assert_eq!("Boolean", eb.name.as_slice());
         assert_eq!(0u16, eb.id);
@@ -220,7 +203,7 @@ mod test {
             _ => false,
         });
         
-        let ne = Entry{name: ::std::string::String::from_str("Number"),
+        let ne = Entry{name: StdString::from_str("Number"),
                        id: 1u16, sequence: SequenceNumber(0u16), value: Number(42f64)};
         assert_eq!("Number", ne.name.as_slice());
         assert_eq!(1u16, ne.id);
@@ -230,15 +213,15 @@ mod test {
             _ => 0f64,
         });
         
-        let se = Entry{name: ::std::string::String::from_str("String"),
+        let se = Entry{name: StdString::from_str("String"),
                        id: 2u16, sequence: SequenceNumber(0u16),
-                       value: String(::std::string::String::from_str("Test"))};
+                       value: String(StdString::from_str("Test"))};
         assert_eq!("String", se.name.as_slice());
         assert_eq!(2u16, se.id);
         assert_eq!(SequenceNumber(0u16), se.sequence);
         assert_eq!("Test", match se.entry {
             String(s) => s,
-            _ => ::std::string::String::from_str(""),
+            _ => StdString::from_str(""),
         }.as_slice());
     }
 
