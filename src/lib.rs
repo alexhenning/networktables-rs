@@ -6,16 +6,6 @@ pub use self::errors::{NtResult, NtError, NtErrorKind, UnsupportedType, StringCo
 mod client;
 mod server;
 mod protocol;
+mod sequence_numbers;
 mod errors;
-    
-// pub fn connect_and_listen(address: &'static str) -> NtResult<Client> {
-//     let client = try!(Client::new(address));
-    // let mut client = match maybe_client {
-    //     Ok(c) => c,
-    //     Err => return None,
-    // };
-    // spawn(proc() client.connect_and_listen());
-    // Some(client)
-// }
-
 

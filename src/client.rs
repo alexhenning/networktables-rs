@@ -25,8 +25,9 @@ pub trait Set<T> {
     fn set(&self, key: String, value: T) -> NtResult<()>;
 }
 
-// pub trait SubTable : Get<bool> + Get<f64> + Get<String> {}
-// pub trait SubTable : Get<bool + f64 + String> {}
+// TODO: Figure out table trait
+// pub trait Table : Get<bool> + Get<f64> + Get<String> {}
+// pub trait Table : Get<bool + f64 + String> {}
 
 // TODO: better map without race conditions
 // Locking order to avoid deadlocks:
@@ -69,9 +70,6 @@ pub enum State {
     /// The state once a fatal error occurs.
     Error(NtError)
 }
-
-// impl std::kinds::Sync for Client {}
-// impl Sync for Client {}
 
 impl Client {
     pub fn new(address: &'static str) -> NtResult<Arc<Client>> {
