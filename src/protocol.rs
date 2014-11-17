@@ -193,35 +193,35 @@ mod test {
     
     #[test]
     fn entry_basics() {
-        let eb = Entry{name: StdString::from_str("Boolean"),
+        let eb = Entry{name: "Boolean".into_string(),
                        id: 0u16, sequence: SequenceNumber(0u16), value: Boolean(true)};
         assert_eq!("Boolean", eb.name.as_slice());
         assert_eq!(0u16, eb.id);
         assert_eq!(SequenceNumber(0u16), eb.sequence);
-        assert_eq!(true, match eb.entry {
+        assert_eq!(true, match eb.value {
             Boolean(b) => b,
             _ => false,
         });
         
-        let ne = Entry{name: StdString::from_str("Number"),
+        let ne = Entry{name: "Number".into_string(),
                        id: 1u16, sequence: SequenceNumber(0u16), value: Number(42f64)};
         assert_eq!("Number", ne.name.as_slice());
         assert_eq!(1u16, ne.id);
         assert_eq!(SequenceNumber(0u16), ne.sequence);
-        assert_eq!(42f64, match ne.entry {
+        assert_eq!(42f64, match ne.value {
             Number(n) => n,
             _ => 0f64,
         });
         
-        let se = Entry{name: StdString::from_str("String"),
+        let se = Entry{name: "String".into_string(),
                        id: 2u16, sequence: SequenceNumber(0u16),
-                       value: String(StdString::from_str("Test"))};
+                       value: String("Test".into_string())};
         assert_eq!("String", se.name.as_slice());
         assert_eq!(2u16, se.id);
         assert_eq!(SequenceNumber(0u16), se.sequence);
-        assert_eq!("Test", match se.entry {
+        assert_eq!("Test", match se.value {
             String(s) => s,
-            _ => StdString::from_str(""),
+            _ => "Not a string".into_string(),
         }.as_slice());
     }
 

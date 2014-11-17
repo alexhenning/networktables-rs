@@ -1,3 +1,4 @@
+#![cfg(not(test))]
 extern crate networktables;
 
 // use networktables;
@@ -6,7 +7,6 @@ use networktables::{Set, Get};
 
 use std::io::Timer;
 use std::time::Duration;
-
 
 fn main() {
     println!("Starting");

@@ -42,7 +42,7 @@ pub trait Set<T> {
 ///
 /// # Example
 ///
-/// ```
+/// ```ignore
 /// extern crate networktables;
 /// use networktables;
 /// let networktables::Client::new("localhost:1735").unwrap();
