@@ -22,10 +22,10 @@ fn main() {
     println!("Started");
     for _ in range(0i64, 10i64) {
         // Print each of the types
-        let b: Option<bool> = client.get("//Test".to_string());
+        let b: Option<bool> = client.get("/Bool".to_string());
         let n: Option<f64> = client.get("/Double".to_string());
         let s: Option<String> = client.get("/String".to_string());
-        println!("{} {} {}", b, n, s);
+        println!("{}: {} {} {}", client.get_state(), b, n, s);
 
         // Counter code
         let i: Option<f64> = client.get("/Counter".to_string());
@@ -38,5 +38,7 @@ fn main() {
         periodic.recv();
     }
     client.close();
-    println!("Done");
+    println!("Done: {} -- {}", client.get_state(), client.get_errors());
+    periodic.recv();
+    println!("Done: {} -- {}", client.get_state(), client.get_errors());
 }

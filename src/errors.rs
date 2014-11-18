@@ -1,3 +1,5 @@
+use super::SequenceNumber;
+
 use std::error::Error;
 use std::error::FromError;
 use std::io::IoError;
@@ -11,6 +13,7 @@ pub enum NtErrorKind {
     KeyAlreadyExists(String),
     IdAlreadyExists(u16),
     IdDoesntExist(u16),
+    OutOfOrderSequenceNumbers(SequenceNumber, SequenceNumber), /* (old, new) */
     NetworkProblem(IoError),
 }
 
@@ -27,9 +30,10 @@ impl Error for NtError {
         match self.kind {
             UnsupportedType(_) => "Unsupported entry type.",
             StringConversionError => "Error parsing string.",
-            KeyAlreadyExists(_) => "Key={} already exists.",
-            IdAlreadyExists(_) => "ID={} already exists.",
-            IdDoesntExist(_) => "ID={} Doesn't exists.",
+            KeyAlreadyExists(_) => "Key already exists.",
+            IdAlreadyExists(_) => "ID already exists.",
+            IdDoesntExist(_) => "ID Doesn't exists.",
+            OutOfOrderSequenceNumbers(_, _) => "Sequence number too old.",
             NetworkProblem(_) => "Problem connecting to server.",
         }
     }
@@ -41,6 +45,7 @@ impl Error for NtError {
             KeyAlreadyExists(ref key) => Some(format!("Key={} already exists.", key)),
             IdAlreadyExists(id) => Some(format!("ID={} already exists.", id)),
             IdDoesntExist(id) => Some(format!("ID={} Doesn't exists.", id)),
+            OutOfOrderSequenceNumbers(old, new) => Some(format!("{} >= {}, should be less than.", old, new)),
             NetworkProblem(ref err) => err.detail(),
         }
     }
